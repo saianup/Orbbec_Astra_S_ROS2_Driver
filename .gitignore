@@ -1,0 +1,16 @@
+# colcon build artifacts
+build/
+install/
+log/
+
+# IDE / editor
+.vscode/
+.idea/
+
+# binaries
+*.so
+*.zip
+
+# OpenNI / vendor SDKs
+OpenNI*
+orbbec*
