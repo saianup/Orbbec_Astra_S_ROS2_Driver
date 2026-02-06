@@ -1,11 +1,13 @@
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
+#include <sensor_msgs/msg/camera_info.hpp>
 #include <OpenNI.h>
 
 #include <thread>
 #include <atomic>
 #include <vector>
 #include <cstring>
+#include <cmath>
 
 using namespace openni;
 
@@ -20,6 +22,14 @@ public:
 
         color_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
             "camera/color/image_raw", 10);
+
+        depth_info_pub_ =
+            this->create_publisher<sensor_msgs::msg::CameraInfo>(
+                "camera/depth/camera_info", 10);
+
+        color_info_pub_ =
+            this->create_publisher<sensor_msgs::msg::CameraInfo>(
+                "camera/color/camera_info", 10);
 
         init_camera();
 
@@ -57,6 +67,51 @@ private:
 
         streams_.push_back(&depth_stream_);
         streams_.push_back(&color_stream_);
+
+        color_stream_.getProperty(
+            ONI_STREAM_PROPERTY_HORIZONTAL_FOV, &color_hfov_);
+        color_stream_.getProperty(
+            ONI_STREAM_PROPERTY_VERTICAL_FOV, &color_vfov_);
+
+        depth_stream_.getProperty(
+            ONI_STREAM_PROPERTY_HORIZONTAL_FOV, &depth_hfov_);
+        depth_stream_.getProperty(
+            ONI_STREAM_PROPERTY_VERTICAL_FOV, &depth_vfov_);
+
+        //std::cout << "Color HFOV: " << color_hfov_ << std::endl;
+        //std::cout << "Color VFOV: " << color_vfov_ << std::endl;
+    }
+
+    sensor_msgs::msg::CameraInfo make_camera_info(
+        int width, int height, float hfov, float vfov)
+    {
+        sensor_msgs::msg::CameraInfo info;
+
+        info.header.frame_id = "camera_link";
+        info.width = width;
+        info.height = height;
+
+        double fx = width / (2.0 * tan(hfov / 2.0));
+        double fy = height / (2.0 * tan(vfov / 2.0));
+        double cx = width / 2.0;
+        double cy = height / 2.0;
+
+        info.k = {
+            fx, 0.0, cx,
+            0.0, fy, cy,
+            0.0, 0.0, 1.0
+        };
+
+        info.p = {
+            fx, 0.0, cx, 0.0,
+            0.0, fy, cy, 0.0,
+            0.0, 0.0, 1.0, 0.0
+        };
+
+        info.distortion_model = "plumb_bob";
+        info.d = {0,0,0,0,0};
+
+        return info;
     }
 
     void capture_loop()
@@ -92,39 +147,48 @@ private:
             if (streams_[ready_index] == &depth_stream_) {
                 msg.encoding = "16UC1";
                 depth_pub_->publish(msg);
+
+                auto info = make_camera_info(
+                    msg.width, msg.height,
+                    depth_hfov_, depth_vfov_);
+                info.header.stamp = msg.header.stamp;
+                depth_info_pub_->publish(info);
             } else {
                 msg.encoding = "rgb8";
                 color_pub_->publish(msg);
+
+                auto info = make_camera_info(
+                    msg.width, msg.height,
+                    color_hfov_, color_vfov_);
+                info.header.stamp = msg.header.stamp;
+                color_info_pub_->publish(info);
             }
         }
     }
 
-    // ROS publishers
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr depth_pub_;
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr color_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr depth_info_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr color_info_pub_;
 
-    // OpenNI
     Device device_;
     VideoStream depth_stream_;
     VideoStream color_stream_;
     std::vector<VideoStream*> streams_;
 
-    // Threading
+    float color_hfov_, color_vfov_;
+    float depth_hfov_, depth_vfov_;
+
     std::thread capture_thread_;
     std::atomic<bool> running_{true};
 };
 
-
-/// --------------------
-/// REQUIRED main()
-/// --------------------
 int main(int argc, char **argv)
 {
     rclcpp::init(argc, argv);
-
     auto node = std::make_shared<AstraNode>();
     rclcpp::spin(node);
-
     rclcpp::shutdown();
     return 0;
 }
+
